@@ -31,8 +31,15 @@ const defaultValues: AccountDataDataProviderState = {
 
 export const AccountDataContext = createContext<AccountDataDataProviderState>(defaultValues);
 
+// Helper to convert errors to a message
+function toMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
+
 export const AccountDataContextProvider: React.FC<PropsWithChildren> = ({ children }) => {
-  const { account } = useWallet();
+  const { account, connected } = useWallet();
   const { tokenData } = useGetTokenData();
   const { toast } = useToast();
   const { existsRewardSchedule } = useGetStakePoolData();
@@ -44,54 +51,50 @@ export const AccountDataContextProvider: React.FC<PropsWithChildren> = ({ childr
   const [isCreator, setIsCreator] = useState<boolean>(false);
   const [accountTokenBalance, setAccountTokenBalance] = useState<string>("0");
 
-  const { data } = useQuery({
-    queryKey: ["account-data-context", account, existsRewardSchedule],
+  // ✅ We gate the query and guarantee a default value
+  const enabled = !!connected && !!account?.address;
+
+  const { data = defaultValues } = useQuery({
+    queryKey: [
+      "account-data-context",
+      account?.address ?? null,          // avoid passing the entire object (fewer renders)
+      Boolean(existsRewardSchedule),
+    ],
+    enabled,
     refetchInterval: 1000 * 30,
-    queryFn: async () => {
+    queryFn: async (): Promise<AccountDataDataProviderState> => {
       try {
-        if (!account) return defaultValues;
-        /**
-         * Get the current connected account claimable rewards
-         */
+        if (!account?.address) return defaultValues;
+    
+        const addr = String(account.address);
+    
+        // Claimable rewards
         let claimableRewards = 0;
         if (existsRewardSchedule) {
-          claimableRewards = await getClaimableRewards(account?.address.toStringLong());
+          claimableRewards = await getClaimableRewards(addr);
         }
-
-        /**
-         * Determine whether the current connected account has staked
-         */
-        const hasStake = await getUserHasStake(account?.address.toStringLong());
-
-        /**
-         * Get the current connected account stake data
-         */
-        let accountStakeData;
+        const hasRewards = claimableRewards > 0; // ✅ calculate hasRewards
+    
+        // Does he have a stake?
+        const userHasStake = await getUserHasStake(addr); // ✅ renamed
+    
+        // Stake data (if applicable)
         let accountStakeAmount = 0;
-        if (hasStake) {
-          accountStakeData = await getUserStakeData(account?.address.toStringLong());
-
+        if (userHasStake) {
+          const accountStakeData = await getUserStakeData(addr);
           accountStakeAmount = convertAmountFromOnChainToHumanReadable(
-            parseInt(accountStakeData?.amount ?? "0"),
+            parseInt(accountStakeData?.amount ?? "0", 10),
             tokenData?.decimals ?? 0,
           );
         }
-
-        /**
-         * Define whether the current connected account is the stake creator
-         */
-        const isCreator = REWARD_CREATOR_ADDRESS && account?.address === REWARD_CREATOR_ADDRESS;
-        /**
-         * Get the TOKEN balance of an Account
-         *
-         * The token amount is represnted is the smallest unit on chain. i.e if an account balance is 500
-         * and the token decimals is 2, then the account token balance is represnted as 50000 (500 as the balance and
-         * 00 as the decimals).
-         *
-         * This query first fetch the account token balance, then the token decimals and calculates
-         * the account balance and converts it into a human readable format.
-         */
-        const onChainBalance = await getAccountTokenBalance(account?.address.toStringLong());
+    
+        // Is it the creator?
+        const isCreator =
+          !!REWARD_CREATOR_ADDRESS &&
+          addr.toLowerCase() === REWARD_CREATOR_ADDRESS.toLowerCase();
+    
+        // Token balance in human format
+        const onChainBalance = await getAccountTokenBalance(addr);
         const accountTokenBalance = convertAmountFromOnChainToHumanReadable(
           onChainBalance,
           tokenData?.decimals ?? 0,
@@ -99,14 +102,22 @@ export const AccountDataContextProvider: React.FC<PropsWithChildren> = ({ childr
           minimumFractionDigits: 4,
           maximumFractionDigits: 4,
         });
-
-        return { claimableRewards, hasStake, accountStakeAmount, isCreator, accountTokenBalance };
-      } catch (error: any) {
+    
+        return {
+          claimableRewards,
+          hasRewards,              // ✅ now exists
+          hasStake: userHasStake,  // ✅ avoid shadowing the state
+          accountStakeAmount,
+          isCreator,
+          accountTokenBalance,
+        };
+      } catch (error) {
         toast({
           variant: "destructive",
           title: "Error",
-          description: error,
+          description: toMessage(error),
         });
+        return defaultValues;
       }
     },
   });
@@ -114,7 +125,7 @@ export const AccountDataContextProvider: React.FC<PropsWithChildren> = ({ childr
   useEffect(() => {
     if (data) {
       setClaimableRewards(data.claimableRewards);
-      setHasRewards(data.claimableRewards > 0);
+      setHasRewards(data.hasRewards);            
       setHasStake(data.hasStake);
       setAccountStakeAmount(data.accountStakeAmount);
       setIsCreator(data.isCreator);
