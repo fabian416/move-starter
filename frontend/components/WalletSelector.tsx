@@ -34,26 +34,29 @@ export function WalletSelector() {
   const closeDialog = useCallback(() => setIsDialogOpen(false), []);
 
   const copyAddress = useCallback(async () => {
-    if (!account?.address.toStringLong()) return;
+    const addr = String(account?.address ?? "");
+    if (!addr) return;
     try {
-      await navigator.clipboard.writeText(account.address.toStringLong());
+      await navigator.clipboard.writeText(addr);
       toast({
         title: "Success",
         description: "Copied wallet address to clipboard.",
       });
-    } catch {
+    } catch (err) {
       toast({
         variant: "destructive",
         title: "Error",
-        description: "Failed to copy wallet address.",
+        description: err instanceof Error ? err.message : "Failed to copy wallet address.",
       });
     }
   }, [account?.address, toast]);
 
+  const addr = String(account?.address ?? "");
+
   return connected ? (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button>{account?.ansName || truncateAddress(account?.address.toStringLong()) || "Unknown"}</Button>
+        <Button>{account?.ansName || (addr ? truncateAddress(addr) : "Unknown")}</Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={copyAddress} className="gap-2">
@@ -87,12 +90,13 @@ interface ConnectWalletDialogProps {
 
 function ConnectWalletDialog({ close }: ConnectWalletDialogProps) {
   const { wallets = [], notDetectedWallets = [] } = useWallet();
-  const { aptosConnectWallets, availableWallets, installableWallets } = groupAndSortWallets([...wallets, ...notDetectedWallets]);
+  const { aptosConnectWallets, availableWallets, installableWallets } =
+    groupAndSortWallets([...wallets, ...notDetectedWallets]);
 
   const hasAptosConnectWallets = !!aptosConnectWallets.length;
 
   return (
-    <DialogContent className="max-h-screen overflow-auto">
+    <DialogContent className="max-h-screen overflow-auto" aria-describedby={undefined}>
       <AboutAptosConnect renderEducationScreen={renderEducationScreen}>
         <DialogHeader>
           <DialogTitle className="flex flex-col text-center leading-snug">
